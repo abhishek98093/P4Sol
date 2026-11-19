@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""
+controller.py — ARP Flood Detection Controller
+================================================
+Two independent subsystems:
+
+  (A) Passive monitoring — UNCHANGED from the original.
+      Opens raw AF_PACKET sockets on the three CPU interfaces, parses
+      41-byte P4 CPU-header digests, writes per-window features to CSV,
+      collects per-process psutil metrics, supports SIGUSR1 label toggle.
+
+  (B) IP-block subsystem — NEW.
+      A dedicated daemon thread walks a schedule and, via
+      simple_switch_CLI over Thrift, installs / removes a source-IP
+      block entry in P4 table `tbl_block_ip` on ALL THREE switches.
+
+The block thread never touches the sniff threads or the ticker.
+If the CLI is missing or a switch is unreachable, we log a warning
+and continue — monitoring is never affected.
+
+Default schedule (overridable via CLI args):
+    t = 0s        controller starts
+    t = 10s       install block on 10.1.1.1 across s1, s2, s11
+    t = 15s       remove  block on 10.1.1.1 across s1, s2, s11
+    t > 15s       idle
+
+USAGE:
+    sudo python3 controller.py \
+        --interfaces s1-cpu1 s2-cpu1 s11-cpu1 \
+        --label normal
+
+    # custom schedule:
+    sudo python3 controller.py -i s1-cpu1 s2-cpu1 s11-cpu1 \
+        --block-ip 10.1.1.1 --block-after 10 --block-duration 5
+
+    # disable the block test entirely:
+    sudo python3 controller.py -i s1-cpu1 s2-cpu1 s11-cpu1 --no-block-test
+
+    kill -USR1 <pid>     # toggle CSV label at runtime
+"""
+
+import os, sys, time, struct, math, socket, select, statistics
+import threading, collections, csv, logging, argparse, signal
+import subprocess, shutil
+from datetime import datetime
+
+# ── psutil — per-process handle, initialised at import time ──────────────────
+_HAS_PSUTIL = False
+_PROC       = None
+_N_CORES    = 1
+_ctx_last   = None
+
+try:
+    import psutil
+    _HAS_PSUTIL = True
+    _PROC       = psutil.Process(os.getpid())
+    _N_CORES    = psutil.cpu_count() or 1
+    _PROC.cpu_percent(interval=None)
+    _ctx_last = _PROC.num_ctx_switches()
+    print(f"[INFO] psutil {psutil.__version__} loaded — per-process metrics active "
+          f"(PID={os.getpid()}, cores={_N_CORES})")
+except ImportError as e:
+    print(f"[WARNING] psutil not installed: {e}")
+except Exception as e:
+    print(f"[WARNING] Error loading psutil: {e}")
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("/tmp/controller.log"),
+    ]
+)
+log = logging.getLogger("ctrl")
+
+if not _HAS_PSUTIL:
+    log.warning("psutil not installed — performance columns will be -1.")
+    log.warning("Install with: sudo pip3 install psutil")
+
+# ── Config ────────────────────────────────────────────────────────────────────
+WINDOW_SEC      = 3
+CPU_REASON      = 0xAA
+DATASET_PATH    = "/opt/p4work/arp_flood_detection/dataset/arp_dataset_new.csv"
+IFACE_RETRY_SEC = 2
+ETH_P_ALL       = 0x0003
+RECV_BUF_SIZE   = 65535
+SO_RCVBUF_BYTES = 16 * 1024 * 1024
+SHUTDOWN        = threading.Event()
+
+# ── Block subsystem config ────────────────────────────────────────────────────
+# Must match topology.py: thrift_port = 9090 + (sw_id - 1) * 10
+SWITCH_THRIFT_PORTS = {
+    "s1":  9090,
+    "s2":  9100,
+    "s11": 9190,
+}
+P4_TABLE_NAME  = "tbl_block_ip"
+P4_ACTION_NAME = "block_source"
+
+# ── Block schedule defaults ───────────────────────────────────────────────────
+DEFAULT_BLOCK_IP       = "10.1.1.1"
+DEFAULT_BLOCK_AFTER    = 10.0     # seconds after start before blocking
+DEFAULT_BLOCK_DURATION = 5.0      # seconds to keep the block installed
+
+# Linux AF_PACKET stats socket option
+SOL_PACKET        = 263
+PACKET_STATISTICS = 6
+TPACKET_STATS_FMT = "II"
+TPACKET_STATS_LEN = struct.calcsize(TPACKET_STATS_FMT)
+
+# ── CPU Header parser ─────────────────────────────────────────────────────────
+CPU_FMT  = "!BB H 4s 6s 4s H IIIII B"
+CPU_SIZE = struct.calcsize(CPU_FMT)
+
+
+class CpuHeader:
+    __slots__ = [
+        "switch_id", "ingress_port",
+        "sender_ip", "sender_mac", "target_ip", "opcode",
+        "reg_total", "reg_req", "reg_rep",
+        "reg_grat", "reg_bcast", "reg_ctr",
+    ]
+
+    @classmethod
+    def parse(cls, raw: bytes):
+        if len(raw) < CPU_SIZE:
+            return None
+        if raw[0] != CPU_REASON:
+            return None
+        try:
+            f = struct.unpack_from(CPU_FMT, raw, 0)
+        except struct.error:
+            return None
+        o              = cls()
+        o.switch_id    = f[1]
+        o.ingress_port = (f[2] & 0xFF80) >> 7
+        o.sender_ip    = socket.inet_ntoa(f[3])
+        o.sender_mac   = ":".join(f"{b:02x}" for b in f[4])
+        o.target_ip    = socket.inet_ntoa(f[5])
+        o.opcode       = f[6]
+        o.reg_total    = f[7]
+        o.reg_req      = f[8]
+        o.reg_rep      = f[9]
+        o.reg_grat     = f[10]
+        o.reg_bcast    = f[11]
+        o.reg_ctr      = f[12]
+        return o
+
+    def __repr__(self):
+        return (f"<CPU sw={self.switch_id} "
+                f"total={self.reg_total} req={self.reg_req} rep={self.reg_rep} "
+                f"src={self.sender_ip}>")
+
+
+# ── Per-process metric helpers ────────────────────────────────────────────────
+
+def _cpu_load() -> float:
+    if not _HAS_PSUTIL or _PROC is None:
+        return -1.0
+    try:
+        return round(_PROC.cpu_percent(interval=None) / _N_CORES, 2)
+    except Exception:
+        return -1.0
+
+
+def _ctx_delta():
+    global _ctx_last
+    if not _HAS_PSUTIL or _PROC is None or _ctx_last is None:
+        return -1, -1
+    try:
+        current   = _PROC.num_ctx_switches()
+        vol_delta = current.voluntary   - _ctx_last.voluntary
+        inv_delta = current.involuntary - _ctx_last.involuntary
+        _ctx_last = current
+        return max(vol_delta, 0), max(inv_delta, 0)
+    except Exception:
+        return -1, -1
+
+
+def _rss_bytes() -> int:
+    if not _HAS_PSUTIL or _PROC is None:
+        return -1
+    try:
+        return _PROC.memory_info().rss
+    except Exception:
+        return -1
+
+
+def _read_packet_drops(sock) -> int:
+    try:
+        data = sock.getsockopt(SOL_PACKET, PACKET_STATISTICS, TPACKET_STATS_LEN)
+        _tp_packets, tp_drops = struct.unpack(TPACKET_STATS_FMT, data)
+        return tp_drops
+    except OSError:
+        return 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BLOCK SUBSYSTEM  (NEW)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BlockManager:
+    """
+    Installs / removes a source-IP block rule on all three BMv2 switches
+    via simple_switch_CLI.  Keeps per-switch entry handles so removal uses
+    `table_delete <table> <handle>` — the only deletion method that is
+    reliable across BMv2 1.15.x builds.
+    """
+
+    def __init__(self,
+                 switch_ports=None,
+                 cli_binary="simple_switch_CLI",
+                 cli_timeout=10):
+        self.switch_ports = dict(switch_ports or SWITCH_THRIFT_PORTS)
+        self.cli_binary   = cli_binary
+        self.cli_timeout  = cli_timeout
+        self._handles     = {}   # ip_str -> {sw_name: handle_int or None}
+
+        if shutil.which(cli_binary) is None:
+            log.warning(f"[BLOCK] '{cli_binary}' not found in PATH — "
+                        f"block install/remove will fail with a warning.")
+
+    # ── low-level CLI helper ─────────────────────────────────────────────
+
+    def _run_cli(self, sw_name, commands):
+        """
+        Feed `commands` (list of strings, one per line) to
+        simple_switch_CLI on the given switch.  Returns combined stdout.
+        Raises RuntimeError on failure — never blocks the caller forever.
+        """
+        port = self.switch_ports.get(sw_name)
+        if port is None:
+            raise RuntimeError(f"unknown switch {sw_name}")
+
+        cmd = [self.cli_binary, "--thrift-port", str(port)]
+        try:
+            proc = subprocess.run(
+                cmd,
+                input="\n".join(commands) + "\n",
+                capture_output=True,
+                text=True,
+                timeout=self.cli_timeout,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(f"{self.cli_binary} not found: {e}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"CLI timeout on {sw_name} (thrift port {port}) "
+                f"after {self.cli_timeout}s"
+            )
+
+        if proc.returncode != 0:
+            err = proc.stderr.strip() or proc.stdout.strip()
+            raise RuntimeError(
+                f"CLI failed on {sw_name} rc={proc.returncode}: {err}"
+            )
+        return proc.stdout
+
+    @staticmethod
+    def _parse_handle(stdout: str):
+        """
+        simple_switch_CLI prints:
+            Entry has been added with handle 42
+        We grab the last integer on any line containing 'handle'.
+        """
+        for line in stdout.splitlines():
+            low = line.lower()
+            if "handle" in low:
+                toks = [t.strip("(),") for t in line.split()]
+                nums = [t for t in toks if t.isdigit()]
+                if nums:
+                    return int(nums[-1])
+        return None
+
+    # ── public API ───────────────────────────────────────────────────────
+
+    def install(self, ip: str):
+        """
+        Install the block rule for `ip` on every switch.  Per-switch
+        failures are logged but do not abort the loop.
+        """
+        log.info(f"[BLOCK] ===== STARTING BLOCK: {ip} =====")
+        per_sw_handles = {}
+
+        for sw_name in self.switch_ports:
+            try:
+                out = self._run_cli(
+                    sw_name,
+                    [f"table_add {P4_TABLE_NAME} {P4_ACTION_NAME} {ip} =>"]
+                )
+                handle = self._parse_handle(out)
+                per_sw_handles[sw_name] = handle
+                log.info(f"[BLOCK] {sw_name}: block installed "
+                         f"(handle={handle})")
+            except Exception as e:
+                per_sw_handles[sw_name] = None
+                log.warning(f"[BLOCK] {sw_name}: install FAILED — {e}")
+
+        self._handles[ip] = per_sw_handles
+        return per_sw_handles
+
+    def remove(self, ip: str):
+        """
+        Remove the block rule for `ip` from every switch that has a
+        recorded handle.  Switches with no handle are skipped (they
+        never had the rule installed successfully).
+        """
+        log.info(f"[BLOCK] ===== REMOVING BLOCK: {ip} =====")
+        known = self._handles.get(ip, {})
+
+        for sw_name in self.switch_ports:
+            handle = known.get(sw_name)
+            if handle is None:
+                log.warning(f"[BLOCK] {sw_name}: no handle known — "
+                            f"nothing to remove")
+                continue
+            try:
+                self._run_cli(
+                    sw_name,
+                    [f"table_delete {P4_TABLE_NAME} {handle}"]
+                )
+                log.info(f"[BLOCK] {sw_name}: block removed (handle={handle})")
+            except Exception as e:
+                log.warning(f"[BLOCK] {sw_name}: remove FAILED — {e}")
+
+        # drop bookkeeping for this ip
+        self._handles.pop(ip, None)
+
+
+def _block_schedule_thread(block_ip: str,
+                           block_after: float,
+                           block_duration: float,
+                           manager: BlockManager):
+    """
+    Dedicated thread that runs the block/unblock schedule once and then
+    exits.  Uses SHUTDOWN.wait() so Ctrl+C aborts promptly.
+    """
+    try:
+        log.info(f"[BLOCK] Test armed: IP={block_ip}, "
+                 f"block after {block_after:.1f}s for {block_duration:.1f}s")
+
+        # Phase 1 — wait for `block_after` seconds
+        if SHUTDOWN.wait(block_after):
+            log.info("[BLOCK] Shutdown before block start — aborting test")
+            return
+
+        # Phase 2 — install block
+        manager.install(block_ip)
+
+        # Phase 3 — hold for `block_duration` seconds
+        if SHUTDOWN.wait(block_duration):
+            log.info("[BLOCK] Shutdown during block — removing early")
+            manager.remove(block_ip)
+            return
+
+        # Phase 4 — remove block
+        manager.remove(block_ip)
+
+        log.info("[BLOCK] Test complete — normal forwarding restored")
+    except Exception as e:
+        log.error(f"[BLOCK] schedule thread crashed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WINDOW AGGREGATOR (UNCHANGED)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class WindowAggregator:
+    def __init__(self, window_sec, dataset_path, label_mode):
+        self.window_sec    = window_sec
+        self.dataset_path  = dataset_path
+        self.label_mode    = label_mode
+        self.lock          = threading.Lock()
+        self._ip_mac_seen  = {}
+        self._prev_src_ips = set()
+        self._reset()
+        self._init_csv()
+
+        if _HAS_PSUTIL and _PROC is not None:
+            log.info("Priming per-process CPU counter...")
+            _PROC.cpu_percent(interval=None)
+            time.sleep(0.3)
+            log.info(f"Per-process CPU after prime: {_cpu_load()}%")
+
+    def _reset(self):
+        self.agg_total        = 0
+        self.agg_req          = 0
+        self.agg_rep          = 0
+        self.agg_grat         = 0
+        self.agg_bcast        = 0
+        self.sip_list         = []
+        self.smac_list        = []
+        self.tip_list         = []
+        self.n_packetin       = 0
+        self.window_drops     = 0
+        self.arrival_times    = []
+        self.digest_latencies = []
+        self.win_start        = time.time()
+
+    def _init_csv(self):
+        os.makedirs(os.path.dirname(self.dataset_path), exist_ok=True)
+        write_hdr = not os.path.exists(self.dataset_path)
+        self._f = open(self.dataset_path, "a", newline="")
+        self._w = csv.writer(self._f)
+        if write_hdr:
+            self._w.writerow([
+                "timestamp",
+                "arp_total", "arp_request_count", "arp_reply_count",
+                "req_reply_ratio", "gratuitous_arp_count",
+                "broadcast_count", "packet_rate",
+                "request_rate", "reply_rate",
+                "src_ip_entropy", "src_mac_entropy", "target_ip_entropy",
+                "unique_src_ip_count", "unique_src_mac_count",
+                "top1_ip_share", "digest_sample_count",
+                "ip_mac_consistency_score", "new_ip_ratio",
+                "digests_processed",
+                "packets_dropped",
+                "cpu_load",
+                "ctx_voluntary",
+                "ctx_involuntary",
+                "mem_rss_bytes",
+                "digest_latency_mean_us",
+                "digest_latency_max_us",
+                "iat_mean_ms",
+                "iat_min_ms",
+                "iat_std_ms",
+                "window_buf_depth",
+                "flush_duration_ms",
+                "label",
+            ])
+            self._f.flush()
+        log.info(f"[CSV] {self.dataset_path}")
+
+    def ingest(self

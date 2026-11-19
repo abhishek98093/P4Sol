@@ -1,0 +1,83 @@
+// cammand to run topology in normal
+cd "/home/abhishek/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main"
+bash compile.sh
+sudo python3 topology/topology.py
+# wait for NETWORK READY
+
+
+
+
+
+
+
+
+//write commands here 
+// these commands are used to run controller in different mode in while performing performance check 
+# Run 1 — OLD P4 (sampled 1-in-3, edge-origin only)
+sudo python3 controller/controller_perf.py --mode current \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 200
+
+# Run 2 — NEW P4 (digest on every ARP, all switches)
+sudo python3 controller/controller_perf.py --mode baseline \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 200
+
+1. Recompile the current P4
+
+This makes sure build/arp_monitor.json comes from the current p4/arp_monitor.p4.
+
+bash
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+p4c-bm2-ss --p4v 16 p4/arp_monitor.p4 -o build/arp_monitor.json
+2. Terminal 1: start the normal topology
+bash
+sudo mn -c
+sudo python3 topology/topology.py
+
+Replace topology/ with the folder where your topology.py actually sits. Wait for ✓ All switches report tbl_switch_id populated. before going on.
+
+3. Terminal 2: start the controller in current mode
+bash
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo python3 controller/controller_perf.py --mode current \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 210
+
+Use the same --model setting you used in the baseline run. Otherwise the two runs aren’t comparable.
+
+. Start the baseline run
+
+Terminal 1: network
+
+bash
+sudo mn -c
+sudo python3 $(dirname "$TOPO")/topology_baseline.py
+
+Wait for ✓ All switches report tbl_switch_id populated.
+
+Terminal 2: controller
+
+bash
+sudo python3 controller/controller_perf.py --mode baseline \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 210
+    
+    
+ // commands to run an attack after starring topology and controller 
+ sudo bash run_attack_1hr.sh 600
+ 
+ 
+ 
+ // command to run controller action latency
+ 
+ cd "/home/abhishek/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main"
+
+sudo python3 controller/controller_action_latency.py \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl \
+    --predict-threshold 0.90 \
+    --port-pkts-threshold 15 \
+    --observation-sec 3600 \
+    --base-penalty-sec 5 \
+    --max-penalty-sec 900

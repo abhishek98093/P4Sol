@@ -1,0 +1,712 @@
+#!/usr/bin/env python3
+"""
+controller.py — ARP Flood Detection Controller (13-feature set, no perf metrics)
+=================================================================================
+Subsystems:
+
+  (A) Passive monitoring — parses 45-byte P4 CPU-header digests, computes the
+      13 ML features per 3-second window, writes them to
+      <project>/dataset/arp_dataset_new.csv, prints one line per window to
+      the terminal including the digest count and the top source IP.
+
+  (B) IP-block subsystem — a daemon thread walks a schedule and, via
+      simple_switch_CLI over Thrift, installs / removes a source-IP block
+      entry in P4 table `tbl_block_ip` on all five switches.
+
+No psutil metrics, no digest-latency / IAT / flush-duration columns.
+The CSV contains only the 13 ML features, plus top_src_ip and label.
+
+P4 CPU header layout (45 bytes), must match arp_monitor.p4:
+    offset  size  field
+    0       1     reason                 (constant 0xAA)
+    1       1     switch_id
+    2..3    2     ingress_port (9b) + pad
+    4..7    4     sender_ip
+    8..13   6     sender_mac
+    14..17  4     target_ip
+    18..19  2     opcode
+    20..23  4     reg_arp_total
+    24..27  4     reg_arp_request
+    28..31  4     reg_arp_reply
+    32..35  4     reg_gratuitous
+    36..39  4     reg_broadcast
+    40      1     reg_sample_counter
+    41..44  4     reg_self_mac_mismatch
+
+The 13 ML features emitted per window:
+    1  arp_rate
+    2  request_reply_imbalance
+    3  src_ip_entropy
+    4  unique_src_ip_count
+    5  src_mac_entropy
+    6  target_ip_entropy
+    7  unique_target_ip_count
+    8  broadcast_fraction
+    9  gratuitous_fraction
+   10  self_mac_mismatch_count
+   11  delta_arp_rate
+   12  new_ip_ratio
+   13  cross_switch_spread
+   + digests_received (count, not a feature)
+   + top_src_ip       (string, not a feature)
+   + label
+
+USAGE:
+    sudo python3 controller.py \
+        --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+        --label normal
+"""
+
+import os, sys, time, struct, math, socket, select
+import threading, collections, csv, logging, argparse, signal
+import subprocess, shutil
+from datetime import datetime
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("/tmp/controller.log"),
+    ]
+)
+log = logging.getLogger("ctrl")
+
+# ── Config ────────────────────────────────────────────────────────────────────
+WINDOW_SEC      = 3
+CPU_REASON      = 0xAA
+_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATASET_PATH = os.path.join(_BASE, "dataset", "arp_dataset_new.csv")
+
+IFACE_RETRY_SEC = 2
+ETH_P_ALL       = 0x0003
+RECV_BUF_SIZE   = 65535
+SO_RCVBUF_BYTES = 16 * 1024 * 1024
+SHUTDOWN        = threading.Event()
+
+# ── Block subsystem ───────────────────────────────────────────────────────────
+SWITCH_THRIFT_PORTS = {
+    "s1":  9090,
+    "s2":  9100,
+    "s3":  9110,
+    "s4":  9120,
+    "s11": 9190,
+}
+P4_TABLE_NAME  = "tbl_block_ip"
+P4_ACTION_NAME = "block_source"
+
+DEFAULT_BLOCK_IP       = "10.1.1.1"
+DEFAULT_BLOCK_AFTER    = 10.0
+DEFAULT_BLOCK_DURATION = 5.0
+
+# Linux AF_PACKET stats socket option — retained only to count kernel drops
+# for the "drops" column.  Not a feature; it's diagnostic.
+SOL_PACKET        = 263
+PACKET_STATISTICS = 6
+TPACKET_STATS_FMT = "II"
+TPACKET_STATS_LEN = struct.calcsize(TPACKET_STATS_FMT)
+
+# ── CPU Header parser (45 bytes) ──────────────────────────────────────────────
+CPU_FMT  = "!BB H 4s 6s 4s H IIIII BI"
+CPU_SIZE = struct.calcsize(CPU_FMT)   # must be 45
+
+assert CPU_SIZE == 45, f"CPU_SIZE is {CPU_SIZE}, expected 45"
+
+
+class CpuHeader:
+    __slots__ = [
+        "switch_id", "ingress_port",
+        "sender_ip", "sender_mac", "target_ip", "opcode",
+        "reg_total", "reg_req", "reg_rep",
+        "reg_grat", "reg_bcast", "reg_ctr",
+        "reg_self_mismatch",
+    ]
+
+    @classmethod
+    def parse(cls, raw: bytes):
+        if len(raw) < CPU_SIZE:
+            return None
+        if raw[0] != CPU_REASON:
+            return None
+        try:
+            f = struct.unpack_from(CPU_FMT, raw, 0)
+        except struct.error:
+            return None
+        o                  = cls()
+        o.switch_id        = f[1]
+        o.ingress_port     = (f[2] & 0xFF80) >> 7
+        o.sender_ip        = socket.inet_ntoa(f[3])
+        o.sender_mac       = ":".join(f"{b:02x}" for b in f[4])
+        o.target_ip        = socket.inet_ntoa(f[5])
+        o.opcode           = f[6]
+        o.reg_total        = f[7]
+        o.reg_req          = f[8]
+        o.reg_rep          = f[9]
+        o.reg_grat         = f[10]
+        o.reg_bcast        = f[11]
+        o.reg_ctr          = f[12]
+        o.reg_self_mismatch = f[13]
+        return o
+
+    def __repr__(self):
+        return (f"<CPU sw={self.switch_id} src={self.sender_ip} "
+                f"total={self.reg_total} selfmm={self.reg_self_mismatch}>")
+
+
+def _read_packet_drops(sock) -> int:
+    try:
+        data = sock.getsockopt(SOL_PACKET, PACKET_STATISTICS, TPACKET_STATS_LEN)
+        _tp_packets, tp_drops = struct.unpack(TPACKET_STATS_FMT, data)
+        return tp_drops
+    except OSError:
+        return 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BLOCK SUBSYSTEM
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BlockManager:
+    def __init__(self,
+                 switch_ports=None,
+                 cli_binary="simple_switch_CLI",
+                 cli_timeout=10):
+        self.switch_ports = dict(switch_ports or SWITCH_THRIFT_PORTS)
+        self.cli_binary   = cli_binary
+        self.cli_timeout  = cli_timeout
+        self._handles     = {}
+
+        if shutil.which(cli_binary) is None:
+            log.warning(f"[BLOCK] '{cli_binary}' not found in PATH — "
+                        f"block install/remove will fail with a warning.")
+
+    def _run_cli(self, sw_name, commands):
+        port = self.switch_ports.get(sw_name)
+        if port is None:
+            raise RuntimeError(f"unknown switch {sw_name}")
+
+        cmd = [self.cli_binary, "--thrift-port", str(port)]
+        try:
+            proc = subprocess.run(
+                cmd,
+                input="\n".join(commands) + "\n",
+                capture_output=True,
+                text=True,
+                timeout=self.cli_timeout,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(f"{self.cli_binary} not found: {e}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"CLI timeout on {sw_name} (thrift port {port}) "
+                f"after {self.cli_timeout}s"
+            )
+
+        if proc.returncode != 0:
+            err = proc.stderr.strip() or proc.stdout.strip()
+            raise RuntimeError(
+                f"CLI failed on {sw_name} rc={proc.returncode}: {err}"
+            )
+        return proc.stdout
+
+    @staticmethod
+    def _parse_handle(stdout: str):
+        for line in stdout.splitlines():
+            low = line.lower()
+            if "handle" in low:
+                toks = [t.strip("(),") for t in line.split()]
+                nums = [t for t in toks if t.isdigit()]
+                if nums:
+                    return int(nums[-1])
+        return None
+
+    def install(self, ip: str):
+        log.info(f"[BLOCK] ===== STARTING BLOCK: {ip} =====")
+        per_sw_handles = {}
+        for sw_name in self.switch_ports:
+            try:
+                out = self._run_cli(
+                    sw_name,
+                    [f"table_add {P4_TABLE_NAME} {P4_ACTION_NAME} {ip} =>"]
+                )
+                handle = self._parse_handle(out)
+                per_sw_handles[sw_name] = handle
+                log.info(f"[BLOCK] {sw_name}: block installed "
+                         f"(handle={handle})")
+            except Exception as e:
+                per_sw_handles[sw_name] = None
+                log.warning(f"[BLOCK] {sw_name}: install FAILED — {e}")
+        self._handles[ip] = per_sw_handles
+        return per_sw_handles
+
+    def remove(self, ip: str):
+        log.info(f"[BLOCK] ===== REMOVING BLOCK: {ip} =====")
+        known = self._handles.get(ip, {})
+        for sw_name in self.switch_ports:
+            handle = known.get(sw_name)
+            if handle is None:
+                log.warning(f"[BLOCK] {sw_name}: no handle known — "
+                            f"nothing to remove")
+                continue
+            try:
+                self._run_cli(
+                    sw_name,
+                    [f"table_delete {P4_TABLE_NAME} {handle}"]
+                )
+                log.info(f"[BLOCK] {sw_name}: block removed (handle={handle})")
+            except Exception as e:
+                log.warning(f"[BLOCK] {sw_name}: remove FAILED — {e}")
+        self._handles.pop(ip, None)
+
+
+def _block_schedule_thread(block_ip: str,
+                           block_after: float,
+                           block_duration: float,
+                           manager: BlockManager):
+    try:
+        log.info(f"[BLOCK] Test armed: IP={block_ip}, "
+                 f"block after {block_after:.1f}s for {block_duration:.1f}s")
+
+        if SHUTDOWN.wait(block_after):
+            log.info("[BLOCK] Shutdown before block start — aborting test")
+            return
+
+        manager.install(block_ip)
+
+        if SHUTDOWN.wait(block_duration):
+            log.info("[BLOCK] Shutdown during block — removing early")
+            manager.remove(block_ip)
+            return
+
+        manager.remove(block_ip)
+        log.info("[BLOCK] Test complete — normal forwarding restored")
+    except Exception as e:
+        log.error(f"[BLOCK] schedule thread crashed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WINDOW AGGREGATOR — 13 features + digest count + top source IP
+# ══════════════════════════════════════════════════════════════════════════════
+
+class WindowAggregator:
+    def __init__(self, window_sec, dataset_path, label_mode):
+        self.window_sec    = window_sec
+        self.dataset_path  = dataset_path
+        self.label_mode    = label_mode
+        self.lock          = threading.Lock()
+
+        # Cross-window state (for temporal features)
+        self._prev_src_ips  = set()
+        self._prev_arp_rate = 0.0
+
+        self._reset()
+        self._init_csv()
+
+    def _reset(self):
+        # Register aggregates (summed across all digests in the window)
+        self.agg_total   = 0
+        self.agg_req     = 0
+        self.agg_rep     = 0
+        self.agg_grat    = 0
+        self.agg_bcast   = 0
+        self.agg_selfmm  = 0
+
+        # Per-packet context lists
+        self.sip_list    = []
+        self.smac_list   = []
+        self.tip_list    = []
+        self.swid_list   = []
+
+        # Diagnostics
+        self.n_packetin  = 0
+        self.window_drops = 0
+
+        self.win_start   = time.time()
+
+    def _init_csv(self):
+        os.makedirs(os.path.dirname(self.dataset_path), exist_ok=True)
+        write_hdr = not os.path.exists(self.dataset_path)
+        self._f = open(self.dataset_path, "a", newline="")
+        self._w = csv.writer(self._f)
+        if write_hdr:
+            self._w.writerow([
+                "timestamp",
+                # ── 13 ML features ───────────────────────────────────────
+                "arp_rate",
+                "request_reply_imbalance",
+                "src_ip_entropy",
+                "unique_src_ip_count",
+                "src_mac_entropy",
+                "target_ip_entropy",
+                "unique_target_ip_count",
+                "broadcast_fraction",
+                "gratuitous_fraction",
+                "self_mac_mismatch_count",
+                "delta_arp_rate",
+                "new_ip_ratio",
+                "cross_switch_spread",
+                # ── informational (not features) ─────────────────────────
+                "digests_received",
+                "top_src_ip",
+                "label",
+            ])
+            self._f.flush()
+        log.info(f"[CSV] {self.dataset_path}")
+
+    # ── ingest ────────────────────────────────────────────────────────────
+
+    def ingest(self, h: CpuHeader):
+        with self.lock:
+            self.agg_total   += h.reg_total
+            self.agg_req     += h.reg_req
+            self.agg_rep     += h.reg_rep
+            self.agg_grat    += h.reg_grat
+            self.agg_bcast   += h.reg_bcast
+            self.agg_selfmm  += h.reg_self_mismatch
+
+            self.sip_list.append(h.sender_ip)
+            self.smac_list.append(h.sender_mac)
+            self.tip_list.append(h.target_ip)
+            self.swid_list.append(h.switch_id)
+
+            self.n_packetin += 1
+
+    def note_drop(self, n=1):
+        if n <= 0:
+            return
+        with self.lock:
+            self.window_drops += n
+
+    def tick(self):
+        with self.lock:
+            if time.time() - self.win_start >= self.window_sec:
+                self._flush()
+                self._reset()
+
+    # ── flush ─────────────────────────────────────────────────────────────
+
+    def _flush(self):
+        elapsed = max(time.time() - self.win_start, 0.001)
+
+        # ── Feature 1: arp_rate ──────────────────────────────────────────
+        arp_rate = round(self.agg_total / elapsed, 4)
+
+        # ── Feature 2: request_reply_imbalance ───────────────────────────
+        r_req = self.agg_req
+        r_rep = self.agg_rep
+        request_reply_imbalance = round(
+            (r_req - r_rep) / (r_req + r_rep + 1), 4
+        )
+
+        # ── Feature 3: src_ip_entropy ────────────────────────────────────
+        src_ip_entropy = round(self._entropy(self.sip_list), 4)
+
+        # ── Feature 4: unique_src_ip_count ───────────────────────────────
+        usip = set(self.sip_list)
+        unique_src_ip_count = len(usip)
+
+        # ── Feature 5: src_mac_entropy ───────────────────────────────────
+        src_mac_entropy = round(self._entropy(self.smac_list), 4)
+
+        # ── Feature 6: target_ip_entropy ─────────────────────────────────
+        target_ip_entropy = round(self._entropy(self.tip_list), 4)
+
+        # ── Feature 7: unique_target_ip_count ────────────────────────────
+        unique_target_ip_count = len(set(self.tip_list))
+
+        # ── Feature 8: broadcast_fraction ────────────────────────────────
+        broadcast_fraction = round(
+            self.agg_bcast / (self.agg_total + 1), 4
+        )
+
+        # ── Feature 9: gratuitous_fraction ───────────────────────────────
+        gratuitous_fraction = round(
+            self.agg_grat / (self.agg_total + 1), 4
+        )
+
+        # ── Feature 10: self_mac_mismatch_count ──────────────────────────
+        self_mac_mismatch_count = self.agg_selfmm
+
+        # ── Feature 11: delta_arp_rate ───────────────────────────────────
+        delta_arp_rate = round(arp_rate - self._prev_arp_rate, 4)
+
+        # ── Feature 12: new_ip_ratio ─────────────────────────────────────
+        if usip:
+            new_ip_ratio = round(
+                len(usip - self._prev_src_ips) / len(usip), 4
+            )
+        else:
+            new_ip_ratio = 0.0
+
+        # ── Feature 13: cross_switch_spread ──────────────────────────────
+        cross_switch_spread = len(set(self.swid_list))
+
+        # ── Update cross-window state ────────────────────────────────────
+        self._prev_src_ips  = usip.copy()
+        self._prev_arp_rate = arp_rate
+
+        # ── Digest count (informational) ─────────────────────────────────
+        digests_received = self.n_packetin
+
+        # ── Top source IP (informational) ────────────────────────────────
+        if self.sip_list:
+            ctr = collections.Counter(self.sip_list)
+            top_src_ip, top_count = ctr.most_common(1)[0]
+            top_share = round(top_count / len(self.sip_list), 4)
+        else:
+            top_src_ip, top_count, top_share = "-", 0, 0.0
+
+        # ── Write CSV row ────────────────────────────────────────────────
+        label = 1 if self.label_mode == "attack" else 0
+        ts    = datetime.now().isoformat(timespec="seconds")
+
+        self._w.writerow([
+            ts,
+            arp_rate,
+            request_reply_imbalance,
+            src_ip_entropy,
+            unique_src_ip_count,
+            src_mac_entropy,
+            target_ip_entropy,
+            unique_target_ip_count,
+            broadcast_fraction,
+            gratuitous_fraction,
+            self_mac_mismatch_count,
+            delta_arp_rate,
+            new_ip_ratio,
+            cross_switch_spread,
+            digests_received,
+            top_src_ip,
+            label,
+        ])
+        self._f.flush()
+
+        # ── Console log ──────────────────────────────────────────────────
+        log.info(
+            f"[WIN] {ts} | "
+            f"digests={digests_received:4d} "
+            f"rate={arp_rate:8.2f}pps "
+            f"imb={request_reply_imbalance:+.3f} "
+            f"H_src={src_ip_entropy:5.3f} "
+            f"uniq_src={unique_src_ip_count:3d} "
+            f"H_mac={src_mac_entropy:5.3f} "
+            f"H_tgt={target_ip_entropy:5.3f} "
+            f"uniq_tgt={unique_target_ip_count:3d} | "
+            f"bcast={broadcast_fraction:.3f} "
+            f"grat={gratuitous_fraction:.3f} "
+            f"mm={self_mac_mismatch_count:3d} "
+            f"drate={delta_arp_rate:+9.2f} "
+            f"newip={new_ip_ratio:.3f} "
+            f"spread={cross_switch_spread} | "
+            f"top_src={top_src_ip} ({top_share*100:.1f}%, {top_count}pkts) | "
+            f"label={'ATTACK' if label else 'normal'}"
+        )
+
+        # ── Prominent TOP-SRC line ───────────────────────────────────────
+        if top_count > 0:
+            log.info(
+                f"[TOP_SRC] {ts} | {top_src_ip}  "
+                f"share={top_share*100:.1f}%  "
+                f"count={top_count}  "
+                f"digests={digests_received}"
+            )
+
+    @staticmethod
+    def _entropy(items):
+        if not items:
+            return 0.0
+        c = collections.Counter(items)
+        t = len(items)
+        return -sum((v / t) * math.log2(v / t) for v in c.values())
+
+    def set_label(self, mode):
+        with self.lock:
+            self.label_mode = mode
+        log.info(f"[LABEL] → {mode}")
+
+    def close(self):
+        with self.lock:
+            if self.n_packetin > 0:
+                self._flush()
+        self._f.close()
+        log.info("[CTRL] CSV closed.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SNIFFER
+# ══════════════════════════════════════════════════════════════════════════════
+
+_agg: WindowAggregator = None
+
+
+def _open_raw_socket(iface: str):
+    try:
+        s = socket.socket(
+            socket.AF_PACKET,
+            socket.SOCK_RAW,
+            socket.htons(ETH_P_ALL),
+        )
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SO_RCVBUF_BYTES)
+        except OSError:
+            pass
+        s.bind((iface, ETH_P_ALL))
+        s.setblocking(False)
+        return s
+    except OSError as e:
+        log.debug(f"[SNIFF] {iface} open failed errno={e.errno}: {e}")
+        return None
+
+
+def _sniff_thread(iface: str):
+    announced_wait = False
+
+    while not SHUTDOWN.is_set():
+        sock = _open_raw_socket(iface)
+        if sock is None:
+            if not announced_wait:
+                log.info(f"[SNIFF] Waiting for {iface} to become available...")
+                announced_wait = True
+            if SHUTDOWN.wait(IFACE_RETRY_SEC):
+                return
+            continue
+
+        announced_wait = False
+        log.info(f"[SNIFF] Capturing on {iface} (ETH_P_ALL, rcvbuf={SO_RCVBUF_BYTES})")
+
+        _read_packet_drops(sock)
+
+        try:
+            while not SHUTDOWN.is_set():
+                r, _, _ = select.select([sock], [], [], 0.5)
+
+                if not r:
+                    drops = _read_packet_drops(sock)
+                    if drops:
+                        _agg.note_drop(drops)
+                    continue
+
+                while True:
+                    try:
+                        raw, _addr = sock.recvfrom(RECV_BUF_SIZE)
+                    except BlockingIOError:
+                        break
+                    except OSError:
+                        raise
+
+                    if not raw:
+                        continue
+
+                    h = CpuHeader.parse(raw)
+                    if h is not None:
+                        _agg.ingest(h)
+
+                drops = _read_packet_drops(sock)
+                if drops:
+                    _agg.note_drop(drops)
+
+        except OSError as e:
+            log.warning(f"[SNIFF] {iface} lost (errno={e.errno}): {e}. Reconnecting...")
+        except Exception as e:
+            log.warning(f"[SNIFF] {iface} error: {e}. Reconnecting...")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+        if SHUTDOWN.wait(IFACE_RETRY_SEC):
+            return
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+
+def main():
+    global _agg
+
+    ap = argparse.ArgumentParser(
+        description="ARP Flood Detection Controller (13-feature set, no perf metrics)"
+    )
+    ap.add_argument("--interfaces", "-i", nargs="+", required=True)
+    ap.add_argument("--window",  "-w", type=int, default=WINDOW_SEC)
+    ap.add_argument("--label",   "-l",
+                    choices=["normal", "attack"], default="normal",
+                    help="normal => label 0 in CSV, attack => label 1 in CSV")
+    ap.add_argument("--dataset", "-d", default=DATASET_PATH)
+
+    ap.add_argument("--block-ip",       default=DEFAULT_BLOCK_IP)
+    ap.add_argument("--block-after",    type=float, default=DEFAULT_BLOCK_AFTER)
+    ap.add_argument("--block-duration", type=float, default=DEFAULT_BLOCK_DURATION)
+    ap.add_argument("--no-block-test",  action="store_true")
+
+    args = ap.parse_args()
+
+    if os.geteuid() != 0:
+        log.error("This controller needs root (AF_PACKET requires CAP_NET_RAW).")
+        sys.exit(1)
+
+    log.info("=" * 72)
+    log.info("  ARP Flood Detection Controller — 13 features, no perf metrics")
+    log.info(f"  Interfaces : {args.interfaces}")
+    log.info(f"  Window     : {args.window}s")
+    log.info(f"  Label      : {args.label}  (SIGUSR1 to toggle)")
+    log.info(f"  ML dataset : {args.dataset}")
+    log.info(f"  CPU_SIZE   : {CPU_SIZE} bytes (CPU_FMT = {CPU_FMT!r})")
+    if args.no_block_test:
+        log.info("  Block test : DISABLED (--no-block-test)")
+    else:
+        log.info(f"  Block test : IP={args.block_ip}  "
+                 f"after={args.block_after}s  duration={args.block_duration}s")
+    log.info("=" * 72)
+
+    _agg = WindowAggregator(args.window, args.dataset, args.label)
+
+    # ── Sniff threads ────────────────────────────────────────────────────
+    threads = []
+    for iface in args.interfaces:
+        t = threading.Thread(target=_sniff_thread, args=(iface,),
+                             name=f"sniff-{iface}", daemon=True)
+        t.start()
+        threads.append(t)
+
+    # ── Ticker thread ────────────────────────────────────────────────────
+    def _ticker():
+        while not SHUTDOWN.is_set():
+            if SHUTDOWN.wait(0.5):
+                return
+            _agg.tick()
+    threading.Thread(target=_ticker, name="ticker", daemon=True).start()
+
+    # ── Block schedule thread ────────────────────────────────────────────
+    if not args.no_block_test:
+        bm = BlockManager()
+        threading.Thread(
+            target=_block_schedule_thread,
+            args=(args.block_ip, args.block_after, args.block_duration, bm),
+            name="block-schedule",
+            daemon=True,
+        ).start()
+
+    # ── SIGUSR1 toggles label ────────────────────────────────────────────
+    def _toggle(sig, frame):
+        _agg.set_label("attack" if _agg.label_mode == "normal" else "normal")
+    signal.signal(signal.SIGUSR1, _toggle)
+
+    log.info(f"[CTRL] PID={os.getpid()}  Running. Ctrl+C to stop.")
+    try:
+        while not SHUTDOWN.is_set():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        log.info("[CTRL] Shutting down...")
+    finally:
+        SHUTDOWN.set()
+        for t in threads:
+            t.join(timeout=1.0)
+        _agg.close()
+
+
+if __name__ == "__main__":
+    main()

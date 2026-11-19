@@ -1,0 +1,145 @@
+==============================================================================
+  ARP FLOOD DETECTION — MODEL TRAINING REPORT
+==============================================================================
+
+  Generated:      2026-11-19T01:35:27
+  Dataset:        dataset/arp_dataset_clean.csv
+  Rows:           6728
+  Model features: 15
+  Train / Test:   5046 / 1682
+  Model:          RandomForestClassifier (200 trees)
+  Class weight:   balanced
+
+  Class distribution:
+    normal (0):     3197
+    attack (1):     3531
+
+  Input schema:
+    CSV has 18 columns. Model uses 15 features:
+       1. arp_rate
+       2. request_reply_imbalance
+       3. src_ip_entropy
+       4. unique_src_ip_count
+       5. src_mac_entropy
+       6. target_ip_entropy
+       7. unique_target_ip_count
+       8. broadcast_fraction
+       9. gratuitous_fraction
+      10. self_mac_mismatch_count
+      11. delta_arp_rate
+      12. new_ip_ratio
+      13. cross_switch_spread
+      14. top_port_share
+      15. unique_host_ports
+
+    Ignored CSV columns: ['timestamp', 'top_src_ip_share']
+
+------------------------------------------------------------------------------
+  1. TRAINING PERFORMANCE
+------------------------------------------------------------------------------
+
+  Train time:               0.88 s
+  Inference (single):       66520.7 µs per window
+  Inference (batched 1000): 103.7 µs per window
+
+  5-fold cross-validation (mean ± std):
+    Accuracy:  0.9783  ± 0.0037
+    Precision: 0.9781  ± 0.0037
+    Recall:    0.9785  ± 0.0036
+    F1:        0.9783  ± 0.0037
+    AUC-ROC:   0.9960  ± 0.0012
+
+------------------------------------------------------------------------------
+  2. TEST-SET METRICS
+------------------------------------------------------------------------------
+
+  Accuracy:       0.9804
+  F1 (macro):     0.9803
+  AUC-ROC:        0.9959
+  AUC-PR:         0.9969
+
+  Per-class:
+    class       precision     recall         f1
+    ---------- ---------- ---------- ----------
+    normal         0.9752     0.9837     0.9794
+    attack         0.9852     0.9773     0.9812
+
+  Confusion matrix:
+                       predicted    predicted
+                       normal       attack
+    actual normal         786           13
+    actual attack          20          863
+
+  False positive rate:  0.0163  (13/799 normals misclassified)
+  False negative rate:  0.0227  (20/883 attacks missed)
+
+  Runtime implications:
+    ✅ FPR 1.63% — very few false blocks on normal traffic
+    ✅ FNR 2.27% — very few attacks slip through
+
+------------------------------------------------------------------------------
+  3. FEATURE IMPORTANCE
+------------------------------------------------------------------------------
+
+  feature                            importance
+  -------------------------------- ------------
+  arp_rate                               0.3078  ███████████████
+  broadcast_fraction                     0.2831  ██████████████
+  new_ip_ratio                           0.1402  ███████
+  unique_src_ip_count                    0.0624  ███
+  unique_target_ip_count                 0.0437  ██
+  src_mac_entropy                        0.0375  █
+  target_ip_entropy                      0.0311  █
+  src_ip_entropy                         0.0305  █
+  request_reply_imbalance                0.0225  █
+  delta_arp_rate                         0.0188  █
+  top_port_share                         0.0119  █
+  unique_host_ports                      0.0042  █
+  gratuitous_fraction                    0.0032  █
+  cross_switch_spread                    0.0031  █
+  self_mac_mismatch_count                0.0000  █
+
+  ✅ All features contribute — no zero-importance columns
+
+------------------------------------------------------------------------------
+  4. SKLEARN CLASSIFICATION REPORT
+------------------------------------------------------------------------------
+
+                precision    recall  f1-score   support
+  
+        normal     0.9752    0.9837    0.9794       799
+        attack     0.9852    0.9773    0.9812       883
+  
+      accuracy                         0.9804      1682
+     macro avg     0.9802    0.9805    0.9803      1682
+  weighted avg     0.9804    0.9804    0.9804      1682
+
+------------------------------------------------------------------------------
+  5. PLOTS
+------------------------------------------------------------------------------
+  report/roc_curve.png
+  report/pr_curve.png
+  report/confusion_matrix.png
+  report/feature_importance.png
+
+------------------------------------------------------------------------------
+  6. RUNTIME INTEGRATION
+------------------------------------------------------------------------------
+
+  Load the model with the controller's --model flag:
+
+    sudo python3 controller/controller.py \
+        --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+        --label normal --dataset /tmp/live.csv \
+        --model models/arp_rf.pkl \
+        --predict-threshold 0.90 \
+        --port-share-threshold 0.30 \
+        --port-pkts-threshold 15 \
+        --block-hold 15.0
+
+  The controller calls predict_proba([features]) once per 1-second
+  window. If prob_attack >= 0.90 AND top_port_share >= 0.30 AND
+  port_pkts_raw >= 15, it installs a tbl_block_port entry on
+  (top_sw_id, top_ingress_port) from the SAME CSV row, held 15 s.
+
+==============================================================================

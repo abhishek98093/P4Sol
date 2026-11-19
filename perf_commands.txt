@@ -1,0 +1,36 @@
+//commands 
+// run current 
+cd "/home/abhishek/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main"
+sudo mn -c
+sudo python3 topology/topology.py
+
+// run controller current 
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo python3 controller/controller_perf.py --mode current \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 210
+    
+// run attack by going in attack folder
+
+sudo bash run_attack_1hr.sh 600
+
+// run baseline 
+
+// run command
+//topology 
+cd "/home/abhishek/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main"
+sudo mn -c
+sudo python3 $(dirname "$TOPO")/topology_baseline.py
+
+
+// controller
+sudo python3 controller/controller_perf.py --mode baseline \
+    --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+    --model models/arp_rf.pkl --duration 210
+
+
+
+
+
+
+

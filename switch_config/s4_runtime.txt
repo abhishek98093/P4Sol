@@ -1,0 +1,558 @@
+table_set_default tbl_switch_id set_switch_id 4
+mirroring_add 100 255
+mc_mgrp_create 1
+mc_node_create 0 1
+mc_node_create 1 2
+mc_node_create 2 3
+mc_node_create 3 4
+mc_node_create 4 5
+mc_node_create 5 6
+mc_node_create 6 7
+mc_node_create 7 8
+mc_node_create 8 9
+mc_node_create 9 10
+mc_node_create 10 11
+mc_node_create 11 12
+mc_node_create 12 13
+mc_node_create 13 14
+mc_node_create 14 15
+mc_node_associate 1 0
+mc_node_associate 1 1
+mc_node_associate 1 2
+mc_node_associate 1 3
+mc_node_associate 1 4
+mc_node_associate 1 5
+mc_node_associate 1 6
+mc_node_associate 1 7
+mc_node_associate 1 8
+mc_node_associate 1 9
+mc_node_associate 1 10
+mc_node_associate 1 11
+mc_node_associate 1 12
+mc_node_associate 1 13
+mc_node_associate 1 14
+mc_mgrp_create 2
+mc_node_create 15 0
+mc_node_create 16 2
+mc_node_create 17 3
+mc_node_create 18 4
+mc_node_create 19 5
+mc_node_create 20 6
+mc_node_create 21 7
+mc_node_create 22 8
+mc_node_create 23 9
+mc_node_create 24 10
+mc_node_create 25 11
+mc_node_create 26 12
+mc_node_create 27 13
+mc_node_create 28 14
+mc_node_create 29 15
+mc_node_associate 2 15
+mc_node_associate 2 16
+mc_node_associate 2 17
+mc_node_associate 2 18
+mc_node_associate 2 19
+mc_node_associate 2 20
+mc_node_associate 2 21
+mc_node_associate 2 22
+mc_node_associate 2 23
+mc_node_associate 2 24
+mc_node_associate 2 25
+mc_node_associate 2 26
+mc_node_associate 2 27
+mc_node_associate 2 28
+mc_node_associate 2 29
+mc_mgrp_create 3
+mc_node_create 30 0
+mc_node_create 31 1
+mc_node_create 32 3
+mc_node_create 33 4
+mc_node_create 34 5
+mc_node_create 35 6
+mc_node_create 36 7
+mc_node_create 37 8
+mc_node_create 38 9
+mc_node_create 39 10
+mc_node_create 40 11
+mc_node_create 41 12
+mc_node_create 42 13
+mc_node_create 43 14
+mc_node_create 44 15
+mc_node_associate 3 30
+mc_node_associate 3 31
+mc_node_associate 3 32
+mc_node_associate 3 33
+mc_node_associate 3 34
+mc_node_associate 3 35
+mc_node_associate 3 36
+mc_node_associate 3 37
+mc_node_associate 3 38
+mc_node_associate 3 39
+mc_node_associate 3 40
+mc_node_associate 3 41
+mc_node_associate 3 42
+mc_node_associate 3 43
+mc_node_associate 3 44
+mc_mgrp_create 4
+mc_node_create 45 0
+mc_node_create 46 1
+mc_node_create 47 2
+mc_node_create 48 4
+mc_node_create 49 5
+mc_node_create 50 6
+mc_node_create 51 7
+mc_node_create 52 8
+mc_node_create 53 9
+mc_node_create 54 10
+mc_node_create 55 11
+mc_node_create 56 12
+mc_node_create 57 13
+mc_node_create 58 14
+mc_node_create 59 15
+mc_node_associate 4 45
+mc_node_associate 4 46
+mc_node_associate 4 47
+mc_node_associate 4 48
+mc_node_associate 4 49
+mc_node_associate 4 50
+mc_node_associate 4 51
+mc_node_associate 4 52
+mc_node_associate 4 53
+mc_node_associate 4 54
+mc_node_associate 4 55
+mc_node_associate 4 56
+mc_node_associate 4 57
+mc_node_associate 4 58
+mc_node_associate 4 59
+mc_mgrp_create 5
+mc_node_create 60 0
+mc_node_create 61 1
+mc_node_create 62 2
+mc_node_create 63 3
+mc_node_create 64 5
+mc_node_create 65 6
+mc_node_create 66 7
+mc_node_create 67 8
+mc_node_create 68 9
+mc_node_create 69 10
+mc_node_create 70 11
+mc_node_create 71 12
+mc_node_create 72 13
+mc_node_create 73 14
+mc_node_create 74 15
+mc_node_associate 5 60
+mc_node_associate 5 61
+mc_node_associate 5 62
+mc_node_associate 5 63
+mc_node_associate 5 64
+mc_node_associate 5 65
+mc_node_associate 5 66
+mc_node_associate 5 67
+mc_node_associate 5 68
+mc_node_associate 5 69
+mc_node_associate 5 70
+mc_node_associate 5 71
+mc_node_associate 5 72
+mc_node_associate 5 73
+mc_node_associate 5 74
+mc_mgrp_create 6
+mc_node_create 75 0
+mc_node_create 76 1
+mc_node_create 77 2
+mc_node_create 78 3
+mc_node_create 79 4
+mc_node_create 80 6
+mc_node_create 81 7
+mc_node_create 82 8
+mc_node_create 83 9
+mc_node_create 84 10
+mc_node_create 85 11
+mc_node_create 86 12
+mc_node_create 87 13
+mc_node_create 88 14
+mc_node_create 89 15
+mc_node_associate 6 75
+mc_node_associate 6 76
+mc_node_associate 6 77
+mc_node_associate 6 78
+mc_node_associate 6 79
+mc_node_associate 6 80
+mc_node_associate 6 81
+mc_node_associate 6 82
+mc_node_associate 6 83
+mc_node_associate 6 84
+mc_node_associate 6 85
+mc_node_associate 6 86
+mc_node_associate 6 87
+mc_node_associate 6 88
+mc_node_associate 6 89
+mc_mgrp_create 7
+mc_node_create 90 0
+mc_node_create 91 1
+mc_node_create 92 2
+mc_node_create 93 3
+mc_node_create 94 4
+mc_node_create 95 5
+mc_node_create 96 7
+mc_node_create 97 8
+mc_node_create 98 9
+mc_node_create 99 10
+mc_node_create 100 11
+mc_node_create 101 12
+mc_node_create 102 13
+mc_node_create 103 14
+mc_node_create 104 15
+mc_node_associate 7 90
+mc_node_associate 7 91
+mc_node_associate 7 92
+mc_node_associate 7 93
+mc_node_associate 7 94
+mc_node_associate 7 95
+mc_node_associate 7 96
+mc_node_associate 7 97
+mc_node_associate 7 98
+mc_node_associate 7 99
+mc_node_associate 7 100
+mc_node_associate 7 101
+mc_node_associate 7 102
+mc_node_associate 7 103
+mc_node_associate 7 104
+mc_mgrp_create 8
+mc_node_create 105 0
+mc_node_create 106 1
+mc_node_create 107 2
+mc_node_create 108 3
+mc_node_create 109 4
+mc_node_create 110 5
+mc_node_create 111 6
+mc_node_create 112 8
+mc_node_create 113 9
+mc_node_create 114 10
+mc_node_create 115 11
+mc_node_create 116 12
+mc_node_create 117 13
+mc_node_create 118 14
+mc_node_create 119 15
+mc_node_associate 8 105
+mc_node_associate 8 106
+mc_node_associate 8 107
+mc_node_associate 8 108
+mc_node_associate 8 109
+mc_node_associate 8 110
+mc_node_associate 8 111
+mc_node_associate 8 112
+mc_node_associate 8 113
+mc_node_associate 8 114
+mc_node_associate 8 115
+mc_node_associate 8 116
+mc_node_associate 8 117
+mc_node_associate 8 118
+mc_node_associate 8 119
+mc_mgrp_create 9
+mc_node_create 120 0
+mc_node_create 121 1
+mc_node_create 122 2
+mc_node_create 123 3
+mc_node_create 124 4
+mc_node_create 125 5
+mc_node_create 126 6
+mc_node_create 127 7
+mc_node_create 128 9
+mc_node_create 129 10
+mc_node_create 130 11
+mc_node_create 131 12
+mc_node_create 132 13
+mc_node_create 133 14
+mc_node_create 134 15
+mc_node_associate 9 120
+mc_node_associate 9 121
+mc_node_associate 9 122
+mc_node_associate 9 123
+mc_node_associate 9 124
+mc_node_associate 9 125
+mc_node_associate 9 126
+mc_node_associate 9 127
+mc_node_associate 9 128
+mc_node_associate 9 129
+mc_node_associate 9 130
+mc_node_associate 9 131
+mc_node_associate 9 132
+mc_node_associate 9 133
+mc_node_associate 9 134
+mc_mgrp_create 10
+mc_node_create 135 0
+mc_node_create 136 1
+mc_node_create 137 2
+mc_node_create 138 3
+mc_node_create 139 4
+mc_node_create 140 5
+mc_node_create 141 6
+mc_node_create 142 7
+mc_node_create 143 8
+mc_node_create 144 10
+mc_node_create 145 11
+mc_node_create 146 12
+mc_node_create 147 13
+mc_node_create 148 14
+mc_node_create 149 15
+mc_node_associate 10 135
+mc_node_associate 10 136
+mc_node_associate 10 137
+mc_node_associate 10 138
+mc_node_associate 10 139
+mc_node_associate 10 140
+mc_node_associate 10 141
+mc_node_associate 10 142
+mc_node_associate 10 143
+mc_node_associate 10 144
+mc_node_associate 10 145
+mc_node_associate 10 146
+mc_node_associate 10 147
+mc_node_associate 10 148
+mc_node_associate 10 149
+mc_mgrp_create 11
+mc_node_create 150 0
+mc_node_create 151 1
+mc_node_create 152 2
+mc_node_create 153 3
+mc_node_create 154 4
+mc_node_create 155 5
+mc_node_create 156 6
+mc_node_create 157 7
+mc_node_create 158 8
+mc_node_create 159 9
+mc_node_create 160 11
+mc_node_create 161 12
+mc_node_create 162 13
+mc_node_create 163 14
+mc_node_create 164 15
+mc_node_associate 11 150
+mc_node_associate 11 151
+mc_node_associate 11 152
+mc_node_associate 11 153
+mc_node_associate 11 154
+mc_node_associate 11 155
+mc_node_associate 11 156
+mc_node_associate 11 157
+mc_node_associate 11 158
+mc_node_associate 11 159
+mc_node_associate 11 160
+mc_node_associate 11 161
+mc_node_associate 11 162
+mc_node_associate 11 163
+mc_node_associate 11 164
+mc_mgrp_create 12
+mc_node_create 165 0
+mc_node_create 166 1
+mc_node_create 167 2
+mc_node_create 168 3
+mc_node_create 169 4
+mc_node_create 170 5
+mc_node_create 171 6
+mc_node_create 172 7
+mc_node_create 173 8
+mc_node_create 174 9
+mc_node_create 175 10
+mc_node_create 176 12
+mc_node_create 177 13
+mc_node_create 178 14
+mc_node_create 179 15
+mc_node_associate 12 165
+mc_node_associate 12 166
+mc_node_associate 12 167
+mc_node_associate 12 168
+mc_node_associate 12 169
+mc_node_associate 12 170
+mc_node_associate 12 171
+mc_node_associate 12 172
+mc_node_associate 12 173
+mc_node_associate 12 174
+mc_node_associate 12 175
+mc_node_associate 12 176
+mc_node_associate 12 177
+mc_node_associate 12 178
+mc_node_associate 12 179
+mc_mgrp_create 13
+mc_node_create 180 0
+mc_node_create 181 1
+mc_node_create 182 2
+mc_node_create 183 3
+mc_node_create 184 4
+mc_node_create 185 5
+mc_node_create 186 6
+mc_node_create 187 7
+mc_node_create 188 8
+mc_node_create 189 9
+mc_node_create 190 10
+mc_node_create 191 11
+mc_node_create 192 13
+mc_node_create 193 14
+mc_node_create 194 15
+mc_node_associate 13 180
+mc_node_associate 13 181
+mc_node_associate 13 182
+mc_node_associate 13 183
+mc_node_associate 13 184
+mc_node_associate 13 185
+mc_node_associate 13 186
+mc_node_associate 13 187
+mc_node_associate 13 188
+mc_node_associate 13 189
+mc_node_associate 13 190
+mc_node_associate 13 191
+mc_node_associate 13 192
+mc_node_associate 13 193
+mc_node_associate 13 194
+mc_mgrp_create 14
+mc_node_create 195 0
+mc_node_create 196 1
+mc_node_create 197 2
+mc_node_create 198 3
+mc_node_create 199 4
+mc_node_create 200 5
+mc_node_create 201 6
+mc_node_create 202 7
+mc_node_create 203 8
+mc_node_create 204 9
+mc_node_create 205 10
+mc_node_create 206 11
+mc_node_create 207 12
+mc_node_create 208 14
+mc_node_create 209 15
+mc_node_associate 14 195
+mc_node_associate 14 196
+mc_node_associate 14 197
+mc_node_associate 14 198
+mc_node_associate 14 199
+mc_node_associate 14 200
+mc_node_associate 14 201
+mc_node_associate 14 202
+mc_node_associate 14 203
+mc_node_associate 14 204
+mc_node_associate 14 205
+mc_node_associate 14 206
+mc_node_associate 14 207
+mc_node_associate 14 208
+mc_node_associate 14 209
+mc_mgrp_create 15
+mc_node_create 210 0
+mc_node_create 211 1
+mc_node_create 212 2
+mc_node_create 213 3
+mc_node_create 214 4
+mc_node_create 215 5
+mc_node_create 216 6
+mc_node_create 217 7
+mc_node_create 218 8
+mc_node_create 219 9
+mc_node_create 220 10
+mc_node_create 221 11
+mc_node_create 222 12
+mc_node_create 223 13
+mc_node_create 224 15
+mc_node_associate 15 210
+mc_node_associate 15 211
+mc_node_associate 15 212
+mc_node_associate 15 213
+mc_node_associate 15 214
+mc_node_associate 15 215
+mc_node_associate 15 216
+mc_node_associate 15 217
+mc_node_associate 15 218
+mc_node_associate 15 219
+mc_node_associate 15 220
+mc_node_associate 15 221
+mc_node_associate 15 222
+mc_node_associate 15 223
+mc_node_associate 15 224
+mc_mgrp_create 16
+mc_node_create 225 0
+mc_node_create 226 1
+mc_node_create 227 2
+mc_node_create 228 3
+mc_node_create 229 4
+mc_node_create 230 5
+mc_node_create 231 6
+mc_node_create 232 7
+mc_node_create 233 8
+mc_node_create 234 9
+mc_node_create 235 10
+mc_node_create 236 11
+mc_node_create 237 12
+mc_node_create 238 13
+mc_node_create 239 14
+mc_node_associate 16 225
+mc_node_associate 16 226
+mc_node_associate 16 227
+mc_node_associate 16 228
+mc_node_associate 16 229
+mc_node_associate 16 230
+mc_node_associate 16 231
+mc_node_associate 16 232
+mc_node_associate 16 233
+mc_node_associate 16 234
+mc_node_associate 16 235
+mc_node_associate 16 236
+mc_node_associate 16 237
+mc_node_associate 16 238
+mc_node_associate 16 239
+table_add tbl_l2 l2_forward 00:00:00:00:01:01 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:02 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:03 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:04 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:05 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:06 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:07 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:08 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:09 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0a => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0b => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0c => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0d => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0e => 15
+table_add tbl_l2 l2_forward 00:00:00:00:01:0f => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:01 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:02 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:03 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:04 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:05 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:06 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:07 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:08 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:09 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0a => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0b => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0c => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0d => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0e => 15
+table_add tbl_l2 l2_forward 00:00:00:00:02:0f => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:01 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:02 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:03 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:04 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:05 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:06 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:07 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:08 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:09 => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0a => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0b => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0c => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0d => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0e => 15
+table_add tbl_l2 l2_forward 00:00:00:00:03:0f => 15
+table_add tbl_l2 l2_forward 00:00:00:00:04:01 => 0
+table_add tbl_l2 l2_forward 00:00:00:00:04:02 => 1
+table_add tbl_l2 l2_forward 00:00:00:00:04:03 => 2
+table_add tbl_l2 l2_forward 00:00:00:00:04:04 => 3
+table_add tbl_l2 l2_forward 00:00:00:00:04:05 => 4
+table_add tbl_l2 l2_forward 00:00:00:00:04:06 => 5
+table_add tbl_l2 l2_forward 00:00:00:00:04:07 => 6
+table_add tbl_l2 l2_forward 00:00:00:00:04:08 => 7
+table_add tbl_l2 l2_forward 00:00:00:00:04:09 => 8
+table_add tbl_l2 l2_forward 00:00:00:00:04:0a => 9
+table_add tbl_l2 l2_forward 00:00:00:00:04:0b => 10
+table_add tbl_l2 l2_forward 00:00:00:00:04:0c => 11
+table_add tbl_l2 l2_forward 00:00:00:00:04:0d => 12
+table_add tbl_l2 l2_forward 00:00:00:00:04:0e => 13
+table_add tbl_l2 l2_forward 00:00:00:00:04:0f => 14

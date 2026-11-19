@@ -1,0 +1,227 @@
+================================================================================
+RUNBOOK — ARP Flood Detection using P4/BMv2
+5 switches (s1, s2, s3, s4 edges; s11 central), 60 hosts (15 per edge)
+================================================================================
+
+--------------------------------------------------------------------------------
+0. PRE-FLIGHT (do once)
+--------------------------------------------------------------------------------
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+
+# Compile the P4 program → build/arp_monitor.json
+./compile.sh
+
+# Sanity-check the compiled header size (must print 45)
+python3 -c "import json; j=json.load(open('build/arp_monitor.json')); \
+ht=next(x for x in j['header_types'] if x['name']=='cpu_header_t'); \
+print('cpu_header_t:', sum(f[1] for f in ht['fields'])//8, 'bytes')"
+
+# Sanity-check the controller format string (must print 45)
+python3 -c "import struct; print('CPU_SIZE =', struct.calcsize('!BB H 4s 6s 4s H IIIII BI'))"
+
+# Clean any stale Mininet / BMv2 state
+sudo mn -c
+sudo pkill -9 -f simple_switch 2>/dev/null || true
+
+# Clear stale runtime config files from previous runs (optional)
+rm -f switch_config/*_runtime.txt
+
+--------------------------------------------------------------------------------
+1. TERMINAL 1 — START THE TOPOLOGY (Mininet + 5 BMv2 switches)
+--------------------------------------------------------------------------------
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo python3 topology/topology.py
+
+# Wait for:
+#   [TOPO] NETWORK READY (5 switches, 60 hosts)
+#   mininet>
+#
+# At the mininet> prompt, smoke-test connectivity:
+#   mininet> h1  ping -c 2 10.1.2.1      (same edge)
+#   mininet> h1  ping -c 2 10.2.1.1      (edge1 -> edge2)
+#   mininet> h1  ping -c 2 10.3.1.1      (edge1 -> edge3)
+#   mininet> h1  ping -c 2 10.4.1.1      (edge1 -> edge4)
+#   mininet> h46 ping -c 2 10.1.1.1      (reverse)
+#   mininet> pingall                     (60*59 = 3540 pairs, ~30 s)
+#
+# Expected: *** Results: 0% dropped (3540/3540 received)
+#
+# Leave this terminal running. Do NOT close it.
+
+--------------------------------------------------------------------------------
+2. TERMINAL 2 — START THE CONTROLLER (monitoring + optional blocking)
+--------------------------------------------------------------------------------
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+
+sudo python3 controller/controller.py \
+  --interfaces s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 \
+  --label normal
+
+# Expected startup:
+#   [CSV] /home/abhishek/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main/dataset/arp_dataset_new.csv
+#   [SNIFF] Capturing on s1-cpu1 ...
+#   [SNIFF] Capturing on s2-cpu1 ...
+#   [SNIFF] Capturing on s3-cpu1 ...
+#   [SNIFF] Capturing on s4-cpu1 ...
+#   [SNIFF] Capturing on s11-cpu1 ...
+#   [CTRL] PID=<n>  Running. Ctrl+C to stop.
+#
+# One [WIN] line and one [TOP_SRC] line are printed every ~1 second.
+
+--------------------------------------------------------------------------------
+3. TERMINAL 1 (mininet>) — GENERATE ARP TRAFFIC FOR NORMAL DATA
+--------------------------------------------------------------------------------
+# quick traffic (small amount)
+mininet> h1 ping -c 20 10.2.1.1
+
+# heavy traffic (large amount, all hosts)
+mininet> pingall
+
+# targeted cross-edge traffic
+mininet> h1  ping -c 20 10.4.15.1
+mininet> h30 ping -c 20 10.3.1.1
+
+--------------------------------------------------------------------------------
+4. TOGGLE THE LABEL BETWEEN NORMAL AND ATTACK
+--------------------------------------------------------------------------------
+# From ANY terminal (must run as root because the controller runs as root):
+sudo pkill -USR1 -f "controller/controller.py"
+
+# Each SIGUSR1 toggles the CSV 'label' column:
+#   normal (0)  ->  attack (1)  ->  normal (0)  ->  ...
+#
+# Convention:
+#   1. Generate normal traffic, keep label = 0.
+#   2. Send SIGUSR1 (label becomes 1).
+#   3. Generate attack traffic.
+#   4. Send SIGUSR1 (label becomes 0).
+#   5. Repeat.
+
+--------------------------------------------------------------------------------
+5. GENERATE ATTACK TRAFFIC (from mininet>)
+--------------------------------------------------------------------------------
+# ARP request flood from one host (1000 packets, no wait)
+mininet> h1 arping -I h1-eth0 -c 1000 10.2.1.1
+
+# ARP flood at max rate (very high pps, run for ~10 s then Ctrl+C)
+mininet> h1 hping3 --flood -1 10.2.1.1
+
+# Gratuitous ARP flood
+mininet> h1 arping -I h1-eth0 -U -c 1000 10.2.1.1
+
+# Distributed flood from several hosts in parallel
+mininet> h1 arping -I h1-eth0 -c 1000 10.4.15.1 &
+mininet> h2 arping -I h2-eth0 -c 1000 10.4.14.1 &
+mininet> h3 arping -I h3-eth0 -c 1000 10.4.13.1 &
+
+# MAC/IP spoofing test (install scapy inside a host if needed):
+mininet> h1 python3 -c "from scapy.all import *; \
+sendp(Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(op=1, psrc='10.9.9.9', hwsrc='00:11:22:33:44:55', pdst='10.2.1.1'), iface='h1-eth0', count=500)"
+
+--------------------------------------------------------------------------------
+6. INSPECT THE OUTPUT
+--------------------------------------------------------------------------------
+# Live CSV
+tail -f ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main/dataset/arp_dataset_new.csv
+
+# Number of rows collected
+wc -l ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main/dataset/arp_dataset_new.csv
+
+# Rows by label (0 = normal, 1 = attack)
+awk -F, 'NR>1 {c[$NF]++} END {for (k in c) print "label="k, c[k]}' \
+  ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main/dataset/arp_dataset_new.csv
+
+# Controller log
+tail -f /tmp/controller.log
+
+--------------------------------------------------------------------------------
+7. BLOCK / UNBLOCK (MANUAL, FROM ANY TERMINAL)
+--------------------------------------------------------------------------------
+# Install a block rule for one source IP on one switch (s1)
+simple_switch_CLI --thrift-port 9090 <<< "table_add tbl_block_ip block_source 10.1.1.1 =>"
+
+# Install a block rule for one source IP on all 5 switches
+for P in 9090 9100 9110 9120 9190; do
+  simple_switch_CLI --thrift-port $P <<< "table_add tbl_block_ip block_source 10.1.1.1 =>"
+done
+
+# Show current block rules on one switch
+simple_switch_CLI --thrift-port 9090 <<< "table_dump tbl_block_ip"
+
+# Remove ALL block rules on all 5 switches
+for P in 9090 9100 9110 9120 9190; do
+  simple_switch_CLI --thrift-port $P <<< "table_clear tbl_block_ip"
+done
+
+--------------------------------------------------------------------------------
+8. STOP EVERYTHING
+--------------------------------------------------------------------------------
+# In Terminal 2 (controller): press Ctrl+C
+#   Expected: [CTRL] Shutting down... [CTRL] CSV closed.
+
+# In Terminal 1 (mininet>): type exit
+mininet> exit
+
+# If anything is stuck:
+sudo pkill -9 -f topology.py
+sudo pkill -9 -f simple_switch
+sudo pkill -9 -f controller.py
+sudo mn -c
+
+--------------------------------------------------------------------------------
+9. FULL RESET (when things go wrong)
+--------------------------------------------------------------------------------
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo pkill -9 -f topology.py      2>/dev/null || true
+sudo pkill -9 -f simple_switch    2>/dev/null || true
+sudo pkill -9 -f controller.py    2>/dev/null || true
+sudo mn -c
+rm -f switch_config/*_runtime.txt
+./compile.sh
+sudo python3 topology/topology.py
+
+--------------------------------------------------------------------------------
+10. FILE / DIRECTORY REFERENCE
+--------------------------------------------------------------------------------
+Project root             : ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+P4 source                : p4/arp_monitor.p4
+Compiled JSON            : build/arp_monitor.json
+Topology script          : topology/topology.py
+Controller script        : controller/controller.py
+Per-switch runtime files : switch_config/s{1,2,3,4,11}_runtime.txt
+Dataset (ML CSV)         : dataset/arp_dataset_new.csv
+Controller log           : /tmp/controller.log
+Switch logs              : /tmp/bmv2_logs/s{1,2,3,4,11}.log
+
+CPU header layout        : 45 bytes (11 fields + 2 pad bytes)
+Monitoring registers     : reg_arp_total, reg_arp_request, reg_arp_reply,
+                           reg_gratuitous, reg_broadcast, reg_self_mac_mismatch
+Sampling register        : reg_sample_counter (triggers clone at 5)
+Sampling rate            : 1 in 5 ARP packets
+Controller window        : 1 second
+Number of ML features    : 13 (plus digests_received, top_src_ip, label)
+Thrift ports             : s1=9090, s2=9100, s3=9110, s4=9120, s11=9190
+CPU port                 : 255
+Clone session            : 100
+
+--------------------------------------------------------------------------------
+11. QUICK CHEAT-SHEET (the shortest possible run sequence)
+--------------------------------------------------------------------------------
+# Terminal 1
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo mn -c && sudo pkill -9 -f simple_switch
+sudo python3 topology/topology.py
+
+# Terminal 2
+cd ~/Desktop/Arp_Flood_Detection-using-P4-Bmv2-main
+sudo python3 controller/controller.py \
+  -i s1-cpu1 s2-cpu1 s3-cpu1 s4-cpu1 s11-cpu1 --label normal
+
+# Back in Terminal 1 (mininet>)
+h1 ping -c 20 10.2.1.1
+pingall
+
+# Terminal 3 (label toggle, if collecting attack data)
+sudo pkill -USR1 -f "controller/controller.py"
+
+================================================================================

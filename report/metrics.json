@@ -1,0 +1,110 @@
+{
+  "dataset": "dataset/arp_dataset_clean.csv",
+  "trained_at": "2026-11-19T01:35:27",
+  "input_schema": {
+    "csv_columns": [
+      "timestamp",
+      "arp_rate",
+      "request_reply_imbalance",
+      "src_ip_entropy",
+      "unique_src_ip_count",
+      "src_mac_entropy",
+      "target_ip_entropy",
+      "unique_target_ip_count",
+      "broadcast_fraction",
+      "gratuitous_fraction",
+      "self_mac_mismatch_count",
+      "delta_arp_rate",
+      "new_ip_ratio",
+      "cross_switch_spread",
+      "top_port_share",
+      "unique_host_ports",
+      "top_src_ip_share",
+      "label"
+    ],
+    "model_features": [
+      "arp_rate",
+      "request_reply_imbalance",
+      "src_ip_entropy",
+      "unique_src_ip_count",
+      "src_mac_entropy",
+      "target_ip_entropy",
+      "unique_target_ip_count",
+      "broadcast_fraction",
+      "gratuitous_fraction",
+      "self_mac_mismatch_count",
+      "delta_arp_rate",
+      "new_ip_ratio",
+      "cross_switch_spread",
+      "top_port_share",
+      "unique_host_ports"
+    ],
+    "ignored_columns": [
+      "timestamp",
+      "top_src_ip_share"
+    ],
+    "target_column": "label"
+  },
+  "n_rows": 6728,
+  "n_features": 15,
+  "class_balance": {
+    "normal": 3197,
+    "attack": 3531
+  },
+  "train_size": 5046,
+  "test_size": 1682,
+  "train_time_s": 0.882,
+  "single_predict_latency_us": 66520.65,
+  "batched_predict_latency_us": 103.66,
+  "test_metrics": {
+    "accuracy": 0.9804,
+    "precision_macro": 0.9802,
+    "recall_macro": 0.9805,
+    "f1_macro": 0.9803,
+    "auc_roc": 0.9959,
+    "auc_pr": 0.9969,
+    "precision_normal": 0.9752,
+    "recall_normal": 0.9837,
+    "f1_normal": 0.9794,
+    "precision_attack": 0.9852,
+    "recall_attack": 0.9773,
+    "f1_attack": 0.9812,
+    "false_positive_rate": 0.0163,
+    "false_negative_rate": 0.0227
+  },
+  "confusion_matrix": {
+    "tn": 786,
+    "fp": 13,
+    "fn": 20,
+    "tp": 863
+  },
+  "cv_5fold": {
+    "accuracy_mean": 0.9783,
+    "accuracy_std": 0.0037,
+    "precision_mean": 0.9781,
+    "precision_std": 0.0037,
+    "recall_mean": 0.9785,
+    "recall_std": 0.0036,
+    "f1_mean": 0.9783,
+    "f1_std": 0.0037,
+    "auc_mean": 0.996,
+    "auc_std": 0.0012
+  },
+  "feature_importances": {
+    "arp_rate": 0.3078,
+    "broadcast_fraction": 0.2831,
+    "new_ip_ratio": 0.1402,
+    "unique_src_ip_count": 0.0624,
+    "unique_target_ip_count": 0.0437,
+    "src_mac_entropy": 0.0375,
+    "target_ip_entropy": 0.0311,
+    "src_ip_entropy": 0.0305,
+    "request_reply_imbalance": 0.0225,
+    "delta_arp_rate": 0.0188,
+    "top_port_share": 0.0119,
+    "unique_host_ports": 0.0042,
+    "gratuitous_fraction": 0.0032,
+    "cross_switch_spread": 0.0031,
+    "self_mac_mismatch_count": 0.0
+  }
+}
