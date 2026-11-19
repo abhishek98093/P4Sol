@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 SKIP_COLS    = {"window_start", "mode", "label", "model_pred"}
 DIGEST_COL   = "window_digests"          # rows with this == 0 are dropped
 LABEL_BASE   = "baseline"
-LABEL_CUR    = "P4Sol"                   # display name for the current run
+LABEL_CUR    = "P4Guard"                   # display name for the current run
 
 
 def discover(prefix):
